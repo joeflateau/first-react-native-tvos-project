@@ -131,11 +131,15 @@ function GridView({
   onItemPress: GridViewItemPressHandler;
 }) {
   return (
-    <View>
+    <ScrollView contentInsetAdjustmentBehavior="automatic">
       {sections.map((section) => (
         <Fragment key={section.title}>
-          <Text style={tw(`text-gray-200 text-lg`)}>{section.title}</Text>
-          <ScrollView horizontal>
+          <ScrollView horizontal contentInsetAdjustmentBehavior="automatic">
+            <Text style={tw(`text-gray-200 p-2 text-2xl`)}>
+              {section.title}
+            </Text>
+          </ScrollView>
+          <ScrollView contentInsetAdjustmentBehavior="automatic" horizontal>
             {section.items.map((item) => (
               <GridViewItem
                 key={item.title}
@@ -146,7 +150,7 @@ function GridView({
           </ScrollView>
         </Fragment>
       ))}
-    </View>
+    </ScrollView>
   );
 }
 
