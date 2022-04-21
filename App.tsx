@@ -11,16 +11,28 @@
 import {
   NavigationContainer,
   RouteProp,
+  StackActions,
   useNavigation,
+  useNavigationContainerRef,
   useRoute,
 } from '@react-navigation/native';
 import {
-  createNativeStackNavigator,
-  NativeStackNavigationProp,
-} from '@react-navigation/native-stack';
+  createStackNavigator,
+  StackCardStyleInterpolator,
+  StackNavigationProp,
+} from '@react-navigation/stack';
 import {range} from 'lodash';
-import React, {Fragment, useMemo} from 'react';
+import React, {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
+  Animated,
+  BackHandler,
   Button,
   ImageBackground,
   ImageURISource,
@@ -28,13 +40,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TVMenuControl,
+  useTVEventHandler,
   View,
 } from 'react-native';
 import Video from 'react-native-video';
 import 'react-native/tvos-types.d';
 import tw from './lib/tw';
-
-declare const global: {HermesInternal: null | {}};
 
 const data: GridViewSection[] = range(1, 6).map((section) => ({
   title: `Section ${section}`,
@@ -45,7 +57,7 @@ const data: GridViewSection[] = range(1, 6).map((section) => ({
   })),
 }));
 
-const Stack = createNativeStackNavigator();
+const Stack = createStackNavigator();
 
 type RootStackPropMap = {
   Detail: {
@@ -56,14 +68,57 @@ type RootStackPropMap = {
   };
 };
 
+const cardStyleFade: StackCardStyleInterpolator = ({current}) => ({
+  cardStyle: {opacity: current.progress},
+});
+
+function useVideoBackButton() {
+  const navRef = useNavigationContainerRef();
+
+  const [canGoBack, setCanGoBack] = useState(false);
+
+  navRef.addListener('state', () =>
+    setCanGoBack(navRef.current?.canGoBack() ?? false),
+  );
+
+  useEffect(() => {
+    if (canGoBack) {
+      TVMenuControl.enableTVMenuKey();
+      const backHandler = BackHandler.addEventListener(
+        'hardwareBackPress',
+        () => {
+          if (navRef.current?.canGoBack()) {
+            navRef.dispatch(StackActions.pop(1));
+          } else {
+            BackHandler.exitApp();
+          }
+          return true;
+        },
+      );
+
+      return () => {
+        TVMenuControl.disableTVMenuKey();
+        backHandler.remove();
+      };
+    }
+    return;
+  }, [canGoBack, navRef]);
+
+  return {navRef};
+}
+
 const App = () => {
+  const {navRef} = useVideoBackButton();
+
   return (
     <>
-      <NavigationContainer>
+      <NavigationContainer ref={navRef}>
         <Stack.Navigator
           initialRouteName="Home"
           screenOptions={{
             headerShown: false,
+            gestureEnabled: false,
+            cardStyleInterpolator: cardStyleFade,
           }}>
           <Stack.Screen name="Home" component={HomeScreen} />
           <Stack.Screen name="Detail" component={DetailScreen} />
@@ -78,23 +133,20 @@ export default App;
 
 function HomeScreen() {
   const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackPropMap, 'Detail'>>();
+    useNavigation<StackNavigationProp<RootStackPropMap, 'Detail'>>();
 
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      style={tw(`bg-gray-900`)}>
+    <View style={tw(`bg-gray-900 flex-1`)}>
       <GridView
         sections={data}
         onItemPress={(item) => navigation.navigate('Detail', {item})}
       />
-    </ScrollView>
+    </View>
   );
 }
 
 function DetailScreen() {
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackPropMap>>();
+  const navigation = useNavigation<StackNavigationProp<RootStackPropMap>>();
   const {
     params: {item},
   } = useRoute<RouteProp<RootStackPropMap, 'Detail'>>();
@@ -109,16 +161,128 @@ function DetailScreen() {
   );
 }
 
+const TRAY_HEIGHT = 320;
+
+function useVideoScreenTray() {
+  const trayTop = useRef(new Animated.Value(-TRAY_HEIGHT));
+  const trayBottom = useRef(new Animated.Value(TRAY_HEIGHT));
+
+  const trayOffset = useMemo(
+    () => ({
+      top: trayTop,
+      bottom: trayBottom,
+    }),
+    [],
+  );
+
+  const [openTray, setOpenTray] = useState<'top' | 'bottom' | null>(null);
+
+  const onOpenTray = useCallback(
+    (targetTray: 'top' | 'bottom' | null) => {
+      if (targetTray === openTray) {
+        return;
+      }
+      if (openTray) {
+        Animated.timing(trayOffset[openTray].current, {
+          useNativeDriver: true,
+          toValue: openTray === 'bottom' ? TRAY_HEIGHT : -TRAY_HEIGHT,
+          duration: 500,
+        }).start();
+      }
+      if (targetTray) {
+        Animated.timing(trayOffset[targetTray].current, {
+          useNativeDriver: true,
+          toValue: 0,
+          duration: 500,
+        }).start();
+      }
+      setOpenTray(targetTray);
+    },
+    [openTray, trayOffset],
+  );
+
+  const navigation = useNavigation();
+  useEffect(() => {
+    const listener = (e: {preventDefault: () => void}) => {
+      if (openTray != null) {
+        e.preventDefault();
+        onOpenTray(null);
+      }
+    };
+    navigation.addListener('beforeRemove', listener);
+    return () => navigation.removeListener('beforeRemove', listener);
+  }, [navigation, onOpenTray, openTray]);
+
+  return {openTray, onOpenTray, trayOffset};
+}
+
 function VideoScreen() {
   const route = useRoute<RouteProp<RootStackPropMap, 'Detail'>>();
+
+  const [paused, setPaused] = useState(false);
+
+  const {openTray, onOpenTray, trayOffset} = useVideoScreenTray();
+
+  useTVEventHandler((ev) => {
+    switch (ev.eventType) {
+      case 'swipeUp':
+        if (openTray == null) {
+          onOpenTray('bottom');
+        } else if (openTray === 'top') {
+          onOpenTray(null);
+        }
+        break;
+      case 'swipeDown':
+        if (openTray == null) {
+          onOpenTray('top');
+        } else if (openTray === 'bottom') {
+          onOpenTray(null);
+        }
+        break;
+      case 'playPause':
+        setPaused((p) => !p);
+        break;
+    }
+  });
 
   return (
     <View style={tw(`flex-1 bg-black`)}>
       <Video
-        controls
+        controls={false}
+        paused={paused}
         source={{uri: route.params.item.videoUrl}}
         style={StyleSheet.absoluteFill}
       />
+
+      <Animated.View
+        style={[
+          tw(`bg-gray-700 absolute left-0 right-0 top-0`),
+          {
+            height: TRAY_HEIGHT,
+            transform: [
+              {
+                translateY: trayOffset.top.current,
+              },
+            ],
+          },
+        ]}>
+        <Text>Top tray</Text>
+      </Animated.View>
+
+      <Animated.View
+        style={[
+          tw(`bg-gray-700 absolute left-0 right-0 bottom-0`),
+          {
+            height: TRAY_HEIGHT,
+            transform: [
+              {
+                translateY: trayOffset.bottom.current,
+              },
+            ],
+          },
+        ]}>
+        <Text>Bottom tray</Text>
+      </Animated.View>
     </View>
   );
 }
