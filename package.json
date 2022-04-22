@@ -5,7 +5,7 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
-    "tvos": "react-native run-ios --simulator \"Apple TV\" --scheme \"myapp-tvOS\"",
+    "tvos": "react-native run-ios --simulator \"Apple TV\" --scheme \"MyApp-tvOS\"",
     "start": "react-native start",
     "test": "jest",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx"
