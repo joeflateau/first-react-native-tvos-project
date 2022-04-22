@@ -42,18 +42,24 @@ import {
   Text,
   TVMenuControl,
   useTVEventHandler,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import Video from 'react-native-video';
 import 'react-native/tvos-types.d';
 import tw from './lib/tw';
 
-const data: GridViewSection[] = range(1, 6).map((section) => ({
+const hlsUrls = [
+  'https://multiplatform-f.akamaihd.net/i/multi/will/bunny/big_buck_bunny_,640x360_400,640x360_700,640x360_1000,950x540_1500,.f4v.csmil/master.m3u8',
+  'https://d2zihajmogu5jn.cloudfront.net/bipbop-advanced/bipbop_16x9_variant.m3u8',
+];
+
+let urlIndex = 0;
+const data: GridViewSection[] = range(1, 8).map((section) => ({
   title: `Section ${section}`,
   items: range(1, 15).map((item) => ({
     title: `Item ${item}`,
-    videoUrl:
-      'https://d2zihajmogu5jn.cloudfront.net/bipbop-advanced/bipbop_16x9_variant.m3u8',
+    videoUrl: hlsUrls[urlIndex++ % hlsUrls.length],
   })),
 }));
 
@@ -136,12 +142,14 @@ function HomeScreen() {
     useNavigation<StackNavigationProp<RootStackPropMap, 'Detail'>>();
 
   return (
-    <View style={tw(`bg-gray-900 flex-1`)}>
+    <ScrollView
+      style={tw(`bg-gray-900 flex-1`)}
+      contentInsetAdjustmentBehavior="automatic">
       <GridView
         sections={data}
         onItemPress={(item) => navigation.navigate('Detail', {item})}
       />
-    </View>
+    </ScrollView>
   );
 }
 
@@ -161,84 +169,88 @@ function DetailScreen() {
   );
 }
 
-const TRAY_HEIGHT = 320;
+function useVideoScreenTray({
+  animationDuration = 350,
+}: {
+  animationDuration?: number;
+} = {}) {
+  const timingValue = useRef(new Animated.Value(0));
 
-function useVideoScreenTray() {
-  const trayTop = useRef(new Animated.Value(-TRAY_HEIGHT));
-  const trayBottom = useRef(new Animated.Value(TRAY_HEIGHT));
-
-  const trayOffset = useMemo(
-    () => ({
-      top: trayTop,
-      bottom: trayBottom,
-    }),
-    [],
-  );
-
-  const [openTray, setOpenTray] = useState<'top' | 'bottom' | null>(null);
+  const [isOpen, setOpen] = useState(false);
+  const [isCompletelyClosed, setIsCompletelyClosed] = useState(true);
 
   const onOpenTray = useCallback(
-    (targetTray: 'top' | 'bottom' | null) => {
-      if (targetTray === openTray) {
+    (shouldBeOpen: boolean) => {
+      if (shouldBeOpen === isOpen) {
         return;
       }
-      if (openTray) {
-        Animated.timing(trayOffset[openTray].current, {
-          useNativeDriver: true,
-          toValue: openTray === 'bottom' ? TRAY_HEIGHT : -TRAY_HEIGHT,
-          duration: 500,
-        }).start();
-      }
-      if (targetTray) {
-        Animated.timing(trayOffset[targetTray].current, {
+      if (isOpen) {
+        Animated.timing(timingValue.current, {
           useNativeDriver: true,
           toValue: 0,
-          duration: 500,
+          duration: animationDuration,
+        }).start((end) => {
+          if (end.finished) {
+            setIsCompletelyClosed(true);
+          }
+        });
+      }
+      if (shouldBeOpen) {
+        setIsCompletelyClosed(false);
+        Animated.timing(timingValue.current, {
+          useNativeDriver: true,
+          toValue: 1,
+          duration: animationDuration,
         }).start();
       }
-      setOpenTray(targetTray);
+      setOpen(shouldBeOpen);
     },
-    [openTray, trayOffset],
+    [animationDuration, isOpen],
   );
 
   const navigation = useNavigation();
   useEffect(() => {
     const listener = (e: {preventDefault: () => void}) => {
-      if (openTray != null) {
+      if (isOpen) {
         e.preventDefault();
-        onOpenTray(null);
+        onOpenTray(false);
       }
     };
     navigation.addListener('beforeRemove', listener);
     return () => navigation.removeListener('beforeRemove', listener);
-  }, [navigation, onOpenTray, openTray]);
+  }, [navigation, onOpenTray, isOpen]);
 
-  return {openTray, onOpenTray, trayOffset};
+  return {
+    isOpen,
+    onOpenTray,
+    isCompletelyClosed,
+    timingValue: timingValue.current,
+  };
 }
+
+const TRAY_HEIGHT = 320;
 
 function VideoScreen() {
   const route = useRoute<RouteProp<RootStackPropMap, 'Detail'>>();
+  const navigation = useNavigation<StackNavigationProp<RootStackPropMap>>();
 
   const [paused, setPaused] = useState(false);
 
-  const {openTray, onOpenTray, trayOffset} = useVideoScreenTray();
+  const topTray = useVideoScreenTray();
+  const bottomTray = useVideoScreenTray();
 
   useTVEventHandler((ev) => {
     switch (ev.eventType) {
       case 'up':
       case 'swipeUp':
-        if (openTray == null) {
-          onOpenTray('bottom');
-        } else if (openTray === 'top') {
-          onOpenTray(null);
+        if (!(topTray.isOpen || bottomTray.isOpen)) {
+          bottomTray.onOpenTray(true);
         }
         break;
       case 'down':
       case 'swipeDown':
-        if (openTray == null) {
-          onOpenTray('top');
-        } else if (openTray === 'bottom') {
-          onOpenTray(null);
+        if (!(topTray.isOpen || bottomTray.isOpen)) {
+          topTray.onOpenTray(true);
         }
         break;
       case 'playPause':
@@ -247,44 +259,73 @@ function VideoScreen() {
     }
   });
 
+  const {height: windowHeight} = useWindowDimensions();
+
+  const item = route.params.item;
+
   return (
     <View style={tw('flex-1 bg-black')}>
       <Video
         controls={false}
         paused={paused}
-        source={{uri: route.params.item.videoUrl}}
+        source={{uri: item.videoUrl}}
         style={StyleSheet.absoluteFill}
       />
       {/* keyboard events are not triggered unless a scrollview is present?? */}
       <ScrollView />
-      <Animated.View
-        style={[
-          tw(`bg-gray-700 absolute left-0 right-0 top-0`),
-          {
-            height: TRAY_HEIGHT,
-            transform: [
-              {
-                translateY: trayOffset.top.current,
-              },
-            ],
-          },
-        ]}>
-        <Text>Top tray</Text>
-      </Animated.View>
-      <Animated.View
-        style={[
-          tw(`bg-gray-700 absolute left-0 right-0 bottom-0`),
-          {
-            height: TRAY_HEIGHT,
-            transform: [
-              {
-                translateY: trayOffset.bottom.current,
-              },
-            ],
-          },
-        ]}>
-        <Text>Bottom tray</Text>
-      </Animated.View>
+
+      {!topTray.isCompletelyClosed && (
+        <Animated.View
+          style={[
+            tw(`absolute inset-0`),
+            {
+              opacity: topTray.timingValue,
+              transform: [
+                {
+                  translateY: topTray.timingValue.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-TRAY_HEIGHT, 0],
+                  }),
+                },
+              ],
+            },
+          ]}>
+          <View style={[tw('bg-gray-700/50 p-3'), {height: TRAY_HEIGHT}]}>
+            <Text style={tw('text-5xl text-white')}>{item.title}</Text>
+            <Text style={tw('text-2xl text-white')}>{item.videoUrl}</Text>
+          </View>
+        </Animated.View>
+      )}
+
+      {!bottomTray.isCompletelyClosed && (
+        <Animated.ScrollView
+          style={[
+            tw(`absolute inset-0`),
+            {
+              opacity: bottomTray.timingValue,
+              transform: [
+                {
+                  translateY: bottomTray.timingValue.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [TRAY_HEIGHT, 0],
+                  }),
+                },
+              ],
+            },
+          ]}>
+          <View
+            style={{
+              marginTop: windowHeight - TRAY_HEIGHT,
+            }}>
+            <View style={tw('bg-gray-700/50')}>
+              <GridView
+                sections={data}
+                onItemPress={(item) => navigation.setParams({item})}
+              />
+            </View>
+          </View>
+        </Animated.ScrollView>
+      )}
     </View>
   );
 }
@@ -297,8 +338,8 @@ function GridView({
   onItemPress: GridViewItemPressHandler;
 }) {
   return (
-    <ScrollView contentInsetAdjustmentBehavior="automatic">
-      {sections.map((section) => (
+    <>
+      {sections.map((section, i) => (
         <Fragment key={section.title}>
           <ScrollView horizontal contentInsetAdjustmentBehavior="automatic">
             <Text style={tw(`text-gray-200 p-2 text-2xl`)}>
@@ -306,17 +347,18 @@ function GridView({
             </Text>
           </ScrollView>
           <ScrollView contentInsetAdjustmentBehavior="automatic" horizontal>
-            {section.items.map((item) => (
+            {section.items.map((item, j) => (
               <GridViewItem
                 key={item.title}
                 item={item}
                 onPress={() => onItemPress(item, section)}
+                useAutoFocus={i + j === 0}
               />
             ))}
           </ScrollView>
         </Fragment>
       ))}
-    </ScrollView>
+    </>
   );
 }
 
@@ -330,9 +372,11 @@ type GridViewItemPressHandler = (
 function GridViewItem({
   item,
   onPress,
+  useAutoFocus,
 }: {
   item: GridViewItem;
   onPress: () => void;
+  useAutoFocus?: boolean;
 }) {
   const imageSource = useMemo(() => {
     const source: ImageURISource = {
@@ -342,22 +386,36 @@ function GridViewItem({
     };
     return source;
   }, []);
+
+  const [pressable, setPressable] = useState<View | null>(null);
+
+  useEffect(() => {
+    if (pressable && useAutoFocus) {
+      // setTimeout(() => pressable.focus(), 50);
+    }
+  }, [useAutoFocus, pressable]);
+
   return (
-    <Pressable onPress={() => onPress()}>
+    <Pressable ref={setPressable} onPress={() => onPress()}>
       {({focused}) => (
         <View
           style={tw(
             `mx-3
              w-[320px] h-[180px]
-             border-4
-             bg-gray-500`,
-            focused ? 'border-gray-50' : 'border-gray-700',
+             border-4`,
+            focused ? 'border-gray-50' : 'border-gray-50/0',
           )}>
           <ImageBackground
-            style={tw(`flex-1`)}
+            style={tw(`flex-1 flex justify-center`)}
             source={imageSource}
             resizeMode="cover">
-            <Text style={tw(`text-2xl`)}>{item.title}</Text>
+            <Text
+              style={tw(
+                `text-2xl text-center bg-black/50  px-2 py-1 rounded-lg`,
+                focused ? 'text-white' : 'text-white/70',
+              )}>
+              {item.title}
+            </Text>
           </ImageBackground>
         </View>
       )}
