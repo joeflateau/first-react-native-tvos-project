@@ -225,6 +225,7 @@ function VideoScreen() {
 
   useTVEventHandler((ev) => {
     switch (ev.eventType) {
+      case 'up':
       case 'swipeUp':
         if (openTray == null) {
           onOpenTray('bottom');
@@ -232,6 +233,7 @@ function VideoScreen() {
           onOpenTray(null);
         }
         break;
+      case 'down':
       case 'swipeDown':
         if (openTray == null) {
           onOpenTray('top');
@@ -246,14 +248,15 @@ function VideoScreen() {
   });
 
   return (
-    <View style={tw(`flex-1 bg-black`)}>
+    <View style={tw('flex-1 bg-black')}>
       <Video
         controls={false}
         paused={paused}
         source={{uri: route.params.item.videoUrl}}
         style={StyleSheet.absoluteFill}
       />
-
+      {/* keyboard events are not triggered unless a scrollview is present?? */}
+      <ScrollView />
       <Animated.View
         style={[
           tw(`bg-gray-700 absolute left-0 right-0 top-0`),
@@ -268,7 +271,6 @@ function VideoScreen() {
         ]}>
         <Text>Top tray</Text>
       </Animated.View>
-
       <Animated.View
         style={[
           tw(`bg-gray-700 absolute left-0 right-0 bottom-0`),
